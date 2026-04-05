@@ -5,7 +5,17 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Gift, Heart, Sparkles, Music, Volume2, VolumeX, ChevronRight } from 'lucide-react';
+import { GoogleGenAI, Modality } from "@google/genai";
+import { Gift, Heart, Sparkles, Music, Volume2, VolumeX, ChevronRight, ArrowLeft, Wand2, Loader2 } from 'lucide-react';
+
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
 
 // --- Constants & Types ---
 const CORRECT_LOGIN_PASSWORD = "ANU";
@@ -151,6 +161,11 @@ export default function App() {
   const [selectedGift, setSelectedGift] = useState<number | null>(null);
   const [giftPassword, setGiftPassword] = useState('');
   const [showSurpriseInit, setShowSurpriseInit] = useState(false);
+  
+  // Music Generation States
+  const [isGeneratingMusic, setIsGeneratingMusic] = useState(false);
+  const [generatedAudioUrl, setGeneratedAudioUrl] = useState<string | null>(null);
+  const [musicVibe, setMusicVibe] = useState('Cinematic Piano');
 
   // Initialize Audio
   useEffect(() => {
@@ -168,6 +183,73 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.muted = !isMuted;
       setIsMuted(!isMuted);
+    }
+  };
+
+  const generateBirthdayMusic = async () => {
+    try {
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await window.aistudio.openSelectKey();
+        // The key might not be immediately available due to race condition, 
+        // but the platform handles the injection.
+      }
+
+      setIsGeneratingMusic(true);
+      
+      // Create a fresh instance to ensure it uses the latest key
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContentStream({
+        model: "lyria-3-clip-preview",
+        contents: `Generate a 30-second ${musicVibe} birthday track for someone special.`,
+        config: {
+          responseModalities: [Modality.AUDIO],
+        }
+      });
+
+      let audioBase64 = "";
+      let mimeType = "audio/wav";
+
+      for await (const chunk of response) {
+        const parts = chunk.candidates?.[0]?.content?.parts;
+        if (!parts) continue;
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            if (!audioBase64 && part.inlineData.mimeType) {
+              mimeType = part.inlineData.mimeType;
+            }
+            audioBase64 += part.inlineData.data;
+          }
+        }
+      }
+
+      if (audioBase64) {
+        const binary = atob(audioBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        setGeneratedAudioUrl(url);
+        
+        // Switch to generated audio
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.src = url;
+          audioRef.current.play();
+          setIsMuted(false);
+          audioRef.current.muted = false;
+        }
+      }
+    } catch (error) {
+      console.error("Music generation failed:", error);
+      // If key not found, prompt again
+      if (error instanceof Error && error.message.includes("Requested entity was not found")) {
+        await window.aistudio.openSelectKey();
+      }
+    } finally {
+      setIsGeneratingMusic(false);
     }
   };
 
@@ -227,12 +309,14 @@ export default function App() {
       
       {/* Background Audio Control */}
       {stage !== 'login' && stage !== 'opening' && (
-        <button 
+        <motion.button 
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
           onClick={toggleMute}
           className="fixed top-6 right-6 z-50 p-3 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all border border-white/10"
         >
           {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-        </button>
+        </motion.button>
       )}
 
       <AnimatePresence mode="wait">
@@ -383,9 +467,11 @@ export default function App() {
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
+              whileHover={{ scale: 1.05, backgroundColor: "#116466", color: "#ffffff" }}
+              whileTap={{ scale: 0.95 }}
               transition={{ delay: 6 }}
               onClick={() => setStage('main')}
-              className="mt-12 px-8 py-3 rounded-full border border-[#116466] text-[#116466] hover:bg-[#116466] hover:text-white transition-all flex items-center gap-2 group"
+              className="mt-12 px-8 py-3 rounded-full border border-[#116466] text-[#116466] transition-all flex items-center gap-2 group"
             >
               Continue <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
             </motion.button>
@@ -398,6 +484,8 @@ export default function App() {
             key="main"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.8 }}
             className="relative z-10 flex flex-col items-center justify-center min-h-screen p-6 bg-[#f0f7f4]/5"
           >
             <h2 className="text-3xl font-serif mb-16 text-[#d1e8e2]/60">Pick a surprise...</h2>
@@ -454,30 +542,46 @@ export default function App() {
         {stage === 'gift_unlock' && (
           <motion.div 
             key="unlock"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.05 }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
             className="relative z-10 flex flex-col items-center justify-center min-h-screen p-6"
           >
-            <div className="max-w-md w-full bg-white/5 backdrop-blur-xl p-10 rounded-3xl border border-white/10 shadow-2xl">
-              <h3 className="text-2xl font-serif mb-8 text-center">Unlock Gift {selectedGift}</h3>
-              <p className="text-[#d1e8e2]/60 mb-6 text-center italic">"{GIFT_CONFIGS.find(g => g.id === selectedGift)?.hint}"</p>
-              
-              <input
-                autoFocus
-                type="text"
-                value={giftPassword}
-                onChange={(e) => setGiftPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGiftUnlock()}
-                placeholder="Enter password..."
-                className="w-full bg-black/20 border border-white/10 rounded-xl px-6 py-4 text-center text-xl focus:outline-none focus:border-[#116466] transition-all mb-8"
-              />
-              
-              <button
-                onClick={handleGiftUnlock}
-                className="w-full py-4 rounded-xl bg-[#116466] text-white font-bold hover:bg-[#116466]/80 transition-all shadow-lg"
+            <div className="max-w-md w-full bg-white/5 backdrop-blur-xl p-10 rounded-3xl border border-white/10 shadow-2xl relative">
+              {/* Enhanced Back Button */}
+              <motion.button 
+                whileHover={{ scale: 1.05, backgroundColor: "rgba(17, 100, 102, 1)", color: "#ffffff" }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setStage('main')}
+                className="absolute top-6 left-6 p-2 px-3 rounded-lg bg-white/5 border border-white/10 text-white/60 transition-all flex items-center gap-2 text-xs uppercase tracking-widest group"
               >
-                Reveal Surprise
-              </button>
+                <ArrowLeft size={14} className="group-hover:-translate-x-1 transition-transform" /> Back
+              </motion.button>
+
+              <div className="mt-8">
+                <h3 className="text-2xl font-serif mb-8 text-center">Unlock Gift {selectedGift}</h3>
+                <p className="text-[#d1e8e2]/60 mb-6 text-center italic">"{GIFT_CONFIGS.find(g => g.id === selectedGift)?.hint}"</p>
+                
+                <input
+                  autoFocus
+                  type="text"
+                  value={giftPassword}
+                  onChange={(e) => setGiftPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleGiftUnlock()}
+                  placeholder="Enter password..."
+                  className="w-full bg-black/20 border border-white/10 rounded-xl px-6 py-4 text-center text-xl focus:outline-none focus:border-[#116466] transition-all mb-8"
+                />
+                
+                <motion.button
+                  whileHover={{ scale: 1.02, backgroundColor: "rgba(17, 100, 102, 0.8)" }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleGiftUnlock}
+                  className="w-full py-4 rounded-xl bg-[#116466] text-white font-bold transition-all shadow-lg"
+                >
+                  Reveal Surprise
+                </motion.button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -486,10 +590,22 @@ export default function App() {
         {stage === 'confirmation' && (
           <motion.div 
             key="confirmation"
-            initial={{ opacity: 0, scale: 0.9 }}
+            initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.05 }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
             className="relative z-10 flex flex-col items-center justify-center min-h-screen p-6 text-center"
           >
+            {/* Back Button */}
+            <motion.button 
+              whileHover={{ scale: 1.05, backgroundColor: "rgba(255, 255, 255, 0.2)" }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setStage('main')}
+              className="fixed top-6 left-6 z-50 p-3 rounded-full bg-white/10 backdrop-blur-md transition-all border border-white/10 flex items-center gap-2 px-4"
+            >
+              <ArrowLeft size={18} /> <span className="text-xs uppercase tracking-widest">Back</span>
+            </motion.button>
+
             <h2 className="text-4xl md:text-5xl font-serif mb-12 max-w-2xl">Are you ready for the best surprise ever?</h2>
             
             <div className="flex flex-col gap-4 w-full max-w-xs">
@@ -514,6 +630,8 @@ export default function App() {
             key="celebration"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1 }}
             className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8 text-center"
           >
             {/* Celebration Particles */}
@@ -553,33 +671,97 @@ export default function App() {
                 initial={{ y: 20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ delay: 0.5 }}
-                className="space-y-8"
+                className="space-y-6"
               >
                 <p className="text-2xl md:text-3xl font-serif italic leading-relaxed text-[#d1e8e2]">
                   {GIFT_CONFIGS.find(g => g.id === selectedGift)?.message}
                 </p>
 
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 3 }}
-                  className="pt-12 border-t border-white/10"
-                >
-                  <p className="text-xl md:text-2xl font-light text-[#d1e8e2]/60 leading-relaxed">
+                {selectedGift === 3 && (
+                  <motion.p 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 2.5, duration: 1 }}
+                    className="text-xl md:text-2xl font-light text-[#d1e8e2]/60 leading-relaxed"
+                  >
                     May Allah keep your heart peaceful, protect you from things that hurt you, and quietly fill your life with goodness.
+                  </motion.p>
+                )}
+              </motion.div>
+
+              {/* Music Generation Feature */}
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: selectedGift === 3 ? 4 : 1.5 }}
+                className="mt-12 p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md max-w-md mx-auto"
+              >
+                <h4 className="text-lg font-serif mb-4 flex items-center justify-center gap-2">
+                  <Music size={20} className="text-[#ffb703]" /> 
+                  Magical Melody Composer
+                </h4>
+                <p className="text-sm text-[#d1e8e2]/60 mb-6">
+                  Generate a unique 30-second birthday melody just for you.
+                </p>
+                
+                <div className="flex flex-col gap-4 items-center">
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    {['Cinematic Piano', 'Happy & Upbeat', 'Calm Lullaby', 'Orchestral'].map(vibe => (
+                      <button
+                        key={vibe}
+                        onClick={() => setMusicVibe(vibe)}
+                        className={`px-4 py-2 rounded-full text-[10px] uppercase tracking-widest transition-all ${
+                          musicVibe === vibe 
+                          ? 'bg-[#116466] text-white border-[#116466]' 
+                          : 'bg-white/5 border border-white/10 text-white/40 hover:bg-white/10'
+                        } border`}
+                      >
+                        {vibe}
+                      </button>
+                    ))}
+                  </div>
+
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={generateBirthdayMusic}
+                    disabled={isGeneratingMusic}
+                    className="w-full py-3 rounded-full bg-[#ffb703] text-[#051111] font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg mt-2"
+                  >
+                    {isGeneratingMusic ? (
+                      <>
+                        <Loader2 size={18} className="animate-spin" /> Composing...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 size={18} /> Generate Unique Melody
+                      </>
+                    )}
+                  </motion.button>
+                  
+                  {generatedAudioUrl && (
+                    <p className="text-xs text-[#ffb703] animate-pulse mt-2">
+                      Now playing your custom melody!
+                    </p>
+                  )}
+                  
+                  <p className="text-[10px] text-white/20 mt-2">
+                    Requires a paid Gemini API key. <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline">Learn more</a>
                   </p>
-                </motion.div>
+                </div>
               </motion.div>
 
               <motion.button
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 8 }}
+                whileHover={{ scale: 1.1, color: "#ffb703" }}
+                whileTap={{ scale: 0.9 }}
+                transition={{ delay: selectedGift === 3 ? 8 : 2 }}
                 onClick={() => {
                   setStage('main');
                   setSelectedGift(null);
                 }}
-                className="mt-16 text-sm uppercase tracking-widest text-[#116466] hover:text-[#ffb703] transition-colors"
+                className="mt-16 text-sm uppercase tracking-widest text-[#116466] transition-colors"
               >
                 Back to gifts
               </motion.button>
